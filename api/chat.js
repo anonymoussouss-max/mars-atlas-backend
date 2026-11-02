@@ -27,16 +27,17 @@ export default async function handler(req, res) {
       .filter((m) => m && (m.role === "user" || m.role === "assistant"))
       .map((m) => ({ role: m.role, content: String(m.content ?? "").slice(0, 800) }));
 
-    const messages = [
-      { role: "system", content: `${SYSTEM}\n\nFacts:\n${JSON.stringify(facts ?? {}).slice(0, 4000)}` },
-      ...past,
-      { role: "user", content: question.slice(0, 300) },
-    ];
+    const rules = `${SYSTEM}\n\nFacts:\n${JSON.stringify(facts ?? {}).slice(0, 4000)}`;
+    // Some models (Gemma) reject system messages, so their rules go in the first user turn instead.
+    const noSystem = /gemma/i.test(MODEL);
+    const messages = noSystem
+      ? [{ role: "user", content: `${rules}\n\nQuestion: ${(past.length ? past[0].content : question).slice(0, 800)}` }, ...(past.length ? [...past.slice(1), { role: "user", content: question.slice(0, 300) }] : [])]
+      : [{ role: "system", content: rules }, ...past, { role: "user", content: question.slice(0, 300) }];
     const upstream = openrouter
       ? await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "HTTP-Referer": "https://mars-atlas-backend.vercel.app", "X-Title": "Mars Atlas" },
-          body: JSON.stringify({ model: MODEL, messages, temperature: 0.3, max_tokens: 1200, reasoning: { effort: "low", exclude: true } }),
+          body: JSON.stringify({ model: MODEL, messages, temperature: 0.3, max_tokens: 1200, ...(/gpt-oss|reason/i.test(MODEL) ? { reasoning: { effort: "low", exclude: true } } : {}) }),
         })
       : await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
@@ -44,7 +45,7 @@ export default async function handler(req, res) {
           body: JSON.stringify({ model: MODEL, messages, temperature: 0.3, max_completion_tokens: 1200, reasoning_effort: "low", include_reasoning: false }),
         });
     const data = await upstream.json().catch(() => null);
-    if (!upstream.ok) return res.status(502).json({ error: data?.error?.message || `${provider} error ${upstream.status}` });
+    if (!upstream.ok) return res.status(502).json({ error: [data?.error?.message || `${provider} error ${upstream.status}`, data?.error?.metadata?.raw].filter(Boolean).join(": ").slice(0, 500) });
     const reply = (data?.choices?.[0]?.message?.content || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
     if (!reply) return res.status(502).json({ error: "The model returned an empty reply" });
     return res.status(200).json({ reply });
