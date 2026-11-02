@@ -1,5 +1,7 @@
 // Vercel function for the Atlas guide. Set OPENROUTER_API_KEY (or GROQ_API_KEY) in the host's environment; it never reaches the browser.
-const MODEL = process.env.GUIDE_MODEL || "openai/gpt-oss-120b";
+// GUIDE_MODEL can list backups after commas: OpenRouter tries the next one if a model is busy or down.
+const MODELS = (process.env.GUIDE_MODEL || "openai/gpt-oss-120b").split(",").map((m) => m.trim()).filter(Boolean);
+const MODEL = MODELS.join(",");
 
 const SYSTEM = `You are Atlas, an astronaut guide inside Mars Atlas, a concept tool for planning walks on Mars.
 Answer using only the JSON facts supplied about the current route. Never invent or estimate a number that isn't in the facts, and never calculate new numbers from them: quote them exactly. If the facts don't cover something, say you don't have that data.
@@ -37,12 +39,12 @@ export default async function handler(req, res) {
       ? await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "HTTP-Referer": "https://mars-atlas-backend.vercel.app", "X-Title": "Mars Atlas" },
-          body: JSON.stringify({ model: MODEL, messages, temperature: 0.3, max_tokens: 1200, ...(/gpt-oss|reason/i.test(MODEL) ? { reasoning: { effort: "low", exclude: true } } : {}) }),
+          body: JSON.stringify({ model: MODELS[0], ...(MODELS.length > 1 ? { models: MODELS } : {}), messages, temperature: 0.3, max_tokens: 1200, ...(MODELS.length === 1 && /gpt-oss|reason/i.test(MODEL) ? { reasoning: { effort: "low", exclude: true } } : {}) }),
         })
       : await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({ model: MODEL, messages, temperature: 0.3, max_completion_tokens: 1200, reasoning_effort: "low", include_reasoning: false }),
+          body: JSON.stringify({ model: MODELS[0], messages, temperature: 0.3, max_completion_tokens: 1200, reasoning_effort: "low", include_reasoning: false }),
         });
     const data = await upstream.json().catch(() => null);
     if (!upstream.ok) return res.status(502).json({ error: [data?.error?.message || `${provider} error ${upstream.status}`, data?.error?.metadata?.raw].filter(Boolean).join(": ").slice(0, 500) });
