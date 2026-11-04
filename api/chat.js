@@ -1,5 +1,5 @@
-// Vercel function for the Atlas guide. Set OPENROUTER_API_KEY (or GROQ_API_KEY) in the host's environment; it never reaches the browser.
-// GUIDE_MODEL can list backups after commas: OpenRouter tries the next one if a model is busy or down.
+// Vercel function for the Atlas guide. Set AIROUTER_API_KEY (or OPENROUTER_API_KEY / GROQ_API_KEY) in the host's environment; it never reaches the browser.
+// GUIDE_MODEL can list backups after commas, but only OpenRouter uses them; AIRouter and Groq use the first.
 const MODELS = (process.env.GUIDE_MODEL || "openai/gpt-oss-120b").split(",").map((m) => m.trim()).filter(Boolean);
 const MODEL = MODELS.join(",");
 
@@ -16,11 +16,12 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  // OpenRouter is used when its key is set; otherwise Groq.
-  const openrouter = !!process.env.OPENROUTER_API_KEY;
-  const apiKey = process.env.OPENROUTER_API_KEY || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "OPENROUTER_API_KEY is not set" });
-  const provider = openrouter ? "OpenRouter" : "Groq";
+  // AIRouter is used when its key is set, then OpenRouter, then Groq.
+  const airouter = !!process.env.AIROUTER_API_KEY;
+  const openrouter = !airouter && !!process.env.OPENROUTER_API_KEY;
+  const apiKey = process.env.AIROUTER_API_KEY || process.env.OPENROUTER_API_KEY || process.env.GROQ_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "AIROUTER_API_KEY is not set" });
+  const provider = airouter ? "AIRouter" : openrouter ? "OpenRouter" : "Groq";
 
   try {
     const { question, facts, history } = req.body || {};
@@ -35,7 +36,13 @@ export default async function handler(req, res) {
     const messages = noSystem
       ? [{ role: "user", content: `${rules}\n\nQuestion: ${(past.length ? past[0].content : question).slice(0, 800)}` }, ...(past.length ? [...past.slice(1), { role: "user", content: question.slice(0, 300) }] : [])]
       : [{ role: "system", content: rules }, ...past, { role: "user", content: question.slice(0, 300) }];
-    const upstream = openrouter
+    const upstream = airouter
+      ? await fetch("https://api.airouter.in/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ model: MODELS[0], messages, temperature: 0.3, max_tokens: 1200 }),
+        })
+      : openrouter
       ? await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "HTTP-Referer": "https://mars-atlas-backend.vercel.app", "X-Title": "Mars Atlas" },
